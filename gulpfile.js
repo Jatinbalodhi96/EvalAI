@@ -8,9 +8,7 @@ var gulp = require('gulp'),
     sass = require('gulp-ruby-sass'),
     autoprefixer = require('gulp-autoprefixer'),
     cssnano = require('gulp-cssnano'),
-    jshint = require('gulp-jshint'),
     eslint = require('gulp-eslint'),
-    stylish = require('jshint-stylish'),
     angularPlugin = require('eslint-plugin-angular'),
     gulp_if = require('gulp-if'),
     uglify = require('gulp-uglify'),
@@ -29,9 +27,8 @@ var gulp = require('gulp'),
     prettyError = require('gulp-prettyerror'),
     path = require('path'),
     inject = require('gulp-inject'),
-    // path = require('gulp-path'),
-    // conf = require('./conf')(gulp),
-    _ = require('lodash');
+    _ = require('lodash'),
+    Server = require('karma').Server;
 
 
 var scripts = require('./frontend/app.scripts.json');
@@ -112,7 +109,6 @@ gulp.task('js', function() {
 
     var app = gulp.src('frontend/src/js/app.js')
         .pipe(prettyError())
-        .pipe(jshint.reporter('default'))
         .pipe(concat('app.js'))
         .pipe(gulp_if(flags.production, rename({ suffix: '.min' })))
         .pipe(gulp_if(flags.production, uglify()))
@@ -120,7 +116,6 @@ gulp.task('js', function() {
 
     var configs = gulp.src('frontend/src/js/route-config/*.js')
         .pipe(prettyError())
-        .pipe(jshint.reporter('default'))
         .pipe(concat('route-config.js'))
         .pipe(gulp_if(flags.production, rename({ suffix: '.min' })))
         .pipe(gulp_if(flags.production, uglify()))
@@ -128,7 +123,6 @@ gulp.task('js', function() {
 
     var controllers = gulp.src('frontend/src/js/controllers/*.js')
         .pipe(prettyError())
-        .pipe(jshint.reporter('default'))
         .pipe(concat('controllers.js'))
         .pipe(gulp_if(flags.production, rename({ suffix: '.min' })))
         .pipe(gulp_if(flags.production, uglify()))
@@ -136,7 +130,6 @@ gulp.task('js', function() {
 
     var directives = gulp.src('frontend/src/js/directives/*.js')
         .pipe(prettyError())
-        .pipe(jshint.reporter('default'))
         .pipe(concat('directives.js'))
         .pipe(gulp_if(flags.production, rename({ suffix: '.min' })))
         .pipe(gulp_if(flags.production, uglify()))
@@ -144,7 +137,6 @@ gulp.task('js', function() {
 
     var filters = gulp.src('frontend/src/js/filters/*.js')
         .pipe(prettyError())
-        .pipe(jshint.reporter('default'))
         .pipe(concat('filters.js'))
         .pipe(gulp_if(flags.production, rename({ suffix: '.min' })))
         .pipe(gulp_if(flags.production, uglify()))
@@ -152,7 +144,6 @@ gulp.task('js', function() {
 
     var services = gulp.src('frontend/src/js/services/*.js')
         .pipe(prettyError())
-        .pipe(jshint.reporter('default'))
         .pipe(concat('services.js'))
         .pipe(gulp_if(flags.production, rename({ suffix: '.min' })))
         .pipe(gulp_if(flags.production, uglify()))
@@ -182,7 +173,7 @@ gulp.task('images', function() {
 // Fonts
 gulp.task('fonts', function() {
     var font = gulp.src([
-            'bower_components/font-awesome/fonts/fontawesome-webfont.*', 'bower_components/materialize/fonts/**/*'
+            'bower_components/font-awesome/fonts/fontawesome-webfont.*', 'bower_components/materialize/fonts/**/*', 'frontend/src/fonts/*'
         ])
         .pipe(gulp.dest('frontend/dist/fonts/'));
 
@@ -220,6 +211,17 @@ gulp.task('configDev', function() {
         .pipe(gulp.dest('frontend/dist/js'))
 });
 
+// config for staging server
+gulp.task('configStaging', function() {
+    gulp.src('frontend/src/js/config.json')
+        .pipe(ngConfig('evalai-config', {
+            environment: 'staging'
+        }))
+        .pipe(gulp_if(flags.production, rename({ suffix: '.min' })))
+        .pipe(gulp_if(flags.production, uglify()))
+        .pipe(gulp.dest('frontend/dist/js'))
+});
+
 // config for prod server
 gulp.task('configProd', function() {
     gulp.src('frontend/src/js/config.json')
@@ -238,8 +240,24 @@ var lint_path = {
 
 gulp.task('lint', [], function() {
     return gulp.src(lint_path.js)
-        .pipe(jshint({ "esversion": 6 }))
-        .pipe(jshint.reporter('jshint-stylish'))
+        .pipe(eslint({}))
+        .pipe(eslint.format())
+        .pipe(eslint.results(function(results) {
+
+            // Get the count of lint errors 
+            var countError = results.errorCount;
+            //Get the count of lint warnings
+            var countWarning = results.warningCount;
+            if (countError === 0) {
+                gulp.start('connect');
+                if(countWarning > 0) {
+                    console.warn("Please remove lint warnings in production env.");
+                }
+            } else {
+                connect.serverClose();
+                console.error("Please remove lint errors to connect the server");
+            }
+        }))
 });
 
 // cleaning build process- run clean before deploy and rebuild files again
@@ -325,13 +343,34 @@ gulp.task('watch', function() {
     livereload.listen();
 
     // Watch any files in dist/, reload on change
-    gulp.watch(['frontend/dist/**']).on('change', livereload.changed);
+    gulp.watch(['frontend/dist/**'], ['lint']).on('change', livereload.changed);
 
+});
+
+/**
+ * Run test once and exit
+ */
+gulp.task('test', function (done) {
+  new Server({
+    configFile: __dirname + '/karma.conf.js',
+    singleRun: true
+  }, done).start();
+});
+
+/**
+ * Watch for file changes and re-run tests on each change
+ */
+gulp.task('test:watch', function (done) {
+  new Server({
+    configFile: __dirname + '/karma.conf.js'
+  }, done).start();
 });
 
 
 // Start a server for serving frontend
-gulp.task('connect', function() {
+gulp.task('connect', ['lint'], function() {
+    // initially close the existance server if exists
+    connect.serverClose();
     connect.server({
         root: 'frontend/',
         port: 8888,
@@ -355,6 +394,12 @@ gulp.task('dev', function(callback) {
 
 });
 
+// staging task
+gulp.task('staging', function(callback) {
+    flags.production = false; //Making this 'true' enables file compression. This will be done after js test integration
+    runSequence('clean', ['css', 'js', 'html', 'images', 'vendorjs', 'vendorcss', 'fonts', 'configStaging'], 'inject', callback);
+});
+
 // production task
 gulp.task('prod', function(callback) {
     flags.production = false; //Making this 'true' enables file compression. This will be done after js test integration
@@ -363,5 +408,5 @@ gulp.task('prod', function(callback) {
 
 // Runserver for development
 gulp.task('dev:runserver', function(callback) {
-    runSequence('dev', 'lint', 'connect', 'watch', callback);
+    runSequence('dev', 'connect', 'watch', 'test:watch', callback);
 });

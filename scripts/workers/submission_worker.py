@@ -2,6 +2,7 @@ from __future__ import absolute_import
 import contextlib
 import django
 import importlib
+import logging
 import os
 import pika
 import requests
@@ -17,7 +18,7 @@ from os.path import dirname, join
 
 from django.core.files.base import ContentFile
 from django.utils import timezone
-
+from django.conf import settings
 # need to add django project path in sys path
 # root directory : where manage.py lives
 # worker is present in root-directory/scripts/workers
@@ -35,11 +36,14 @@ DJANGO_SETTINGS_MODULE = 'settings.dev'
 if len(sys.argv) == 2:
     DJANGO_SETTINGS_MODULE = sys.argv[1]
 
+logger = logging.getLogger(__name__)
 
 sys.path.insert(0, DJANGO_PROJECT_PATH)
 
 os.environ.setdefault('DJANGO_SETTINGS_MODULE', DJANGO_SETTINGS_MODULE)
 django.setup()
+
+DJANGO_SERVER = os.environ.get('DJANGO_SERVER', "localhost")
 
 from challenges.models import (Challenge,
                                ChallengePhase,
@@ -48,7 +52,6 @@ from challenges.models import (Challenge,
                                LeaderboardData) # noqa
 
 from jobs.models import Submission          # noqa
-
 
 CHALLENGE_DATA_BASE_DIR = join(COMPUTE_DIRECTORY_PATH, 'challenge_data')
 SUBMISSION_DATA_BASE_DIR = join(COMPUTE_DIRECTORY_PATH, 'submission_files')
@@ -59,7 +62,6 @@ PHASE_ANNOTATION_FILE_PATH = join(PHASE_DATA_DIR, '{annotation_file}')
 SUBMISSION_DATA_DIR = join(SUBMISSION_DATA_BASE_DIR, 'submission_{submission_id}')
 SUBMISSION_INPUT_FILE_PATH = join(SUBMISSION_DATA_DIR, '{input_file}')
 CHALLENGE_IMPORT_STRING = 'challenge_data.challenge_{challenge_id}'
-
 EVALUATION_SCRIPTS = {}
 
 # map of challenge id : phase id : phase annotation file name
@@ -104,7 +106,7 @@ def download_and_extract_file(url, download_location):
     try:
         response = requests.get(url)
     except Exception as e:
-        print 'Failed to fetch file from {}, error {}'.format(url, e)
+        logger.error('Failed to fetch file from {}, error {}'.format(url, e))
         traceback.print_exc()
         response = None
 
@@ -121,7 +123,7 @@ def download_and_extract_zip_file(url, download_location, extract_location):
     try:
         response = requests.get(url)
     except Exception as e:
-        print 'Failed to fetch file from {}, error {}'.format(url, e)
+        logger.error('Failed to fetch file from {}, error {}'.format(url, e))
         response = None
 
     if response and response.status_code == 200:
@@ -135,7 +137,7 @@ def download_and_extract_zip_file(url, download_location, extract_location):
         try:
             os.remove(download_location)
         except Exception as e:
-            print 'Failed to remove zip file {}, error {}'.format(download_location, e)
+            logger.error('Failed to remove zip file {}, error {}'.format(download_location, e))
             traceback.print_exc()
 
 
@@ -162,7 +164,8 @@ def create_dir_as_python_package(directory):
 def return_file_url_per_environment(url):
 
     if DJANGO_SETTINGS_MODULE == "settings.dev":
-        url = "{0}{1}".format("http://localhost:8000", url)
+        base_url = "http://{0}:8000".format(DJANGO_SERVER)
+        url = "{0}{1}".format(base_url, url)
 
     elif DJANGO_SETTINGS_MODULE == "settings.test":
         url = "{0}{1}".format("http://testserver", url)
@@ -212,7 +215,7 @@ def load_active_challenges():
     '''
          * Fetches active challenges and corresponding active phases for it.
     '''
-    q_params = {'published': True}
+    q_params = {'published': True, 'approved_by_admin': True}
     q_params['start_date__lt'] = timezone.now()
     q_params['end_date__gt'] = timezone.now()
 
@@ -234,8 +237,13 @@ def extract_submission_data(submission_id):
     try:
         submission = Submission.objects.get(id=submission_id)
     except Submission.DoesNotExist:
-        print 'Submission {} does not exist'.format(submission_id)
+        logger.critical('Submission {} does not exist'.format(submission_id))
         traceback.print_exc()
+        # return from here so that the message can be acked
+        # This also indicates that we don't want to take action
+        # for message corresponding to which submission entry
+        # does not exist
+        return None
 
     submission_input_file = submission.input_file.url
     submission_input_file = return_file_url_per_environment(submission_input_file)
@@ -281,6 +289,7 @@ def run_submission(challenge_id, challenge_phase, submission_id, submission, use
 
     # call `main` from globals and set `status` to running and hence `started_at`
     submission.status = Submission.RUNNING
+    submission.started_at = timezone.now()
     submission.save()
     try:
         successful_submission_flag = True
@@ -310,7 +319,9 @@ def run_submission(challenge_id, challenge_phase, submission_id, submission, use
                         "key2":45,
                      }
                   }
-               ]
+               ],
+               "submission_metadata": {'foo': 'bar'},
+               "submission_result": ['foo', 'bar'],
             }
         '''
         if 'result' in submission_output:
@@ -361,11 +372,23 @@ def run_submission(challenge_id, challenge_phase, submission_id, submission, use
 
     submission_status = Submission.FINISHED if successful_submission_flag else Submission.FAILED
     submission.status = submission_status
+    submission.completed_at = timezone.now()
     submission.save()
 
     # after the execution is finished, set `status` to finished and hence `completed_at`
     if submission_output:
-        submission.output = submission_output
+        output = {}
+        output['result'] = submission_output.get('result', '')
+        submission.output = output
+
+        # Save submission_result_file
+        submission_result = submission_output.get('submission_result', '')
+        submission.submission_result_file.save('submission_result.json', ContentFile(submission_result))
+
+        # Save submission_metadata_file
+        submission_metadata = submission_output.get('submission_metadata', '')
+        submission.submission_metadata_file.save('submission_metadata.json', ContentFile(submission_metadata))
+
     submission.save()
 
     stderr.close()
@@ -391,11 +414,16 @@ def process_submission_message(message):
     submission_id = message.get('submission_id')
     submission_instance = extract_submission_data(submission_id)
 
+    # so that the further execution does not happen
+    if not submission_instance:
+        return
+
     try:
         challenge_phase = ChallengePhase.objects.get(id=phase_id)
     except ChallengePhase.DoesNotExist:
-        print 'Challenge Phase {} does not exist'.format(phase_id)
+        logger.critical('Challenge Phase {} does not exist'.format(phase_id))
         traceback.print_exc()
+        return
 
     user_annotation_file_path = join(SUBMISSION_DATA_DIR.format(submission_id=submission_id),
                                      os.path.basename(submission_instance.input_file.name))
@@ -408,7 +436,7 @@ def process_add_challenge_message(message):
     try:
         challenge = Challenge.objects.get(id=challenge_id)
     except Challenge.DoesNotExist:
-        print 'Challenge {} does not exist'.format(challenge_id)
+        logger.critical('Challenge {} does not exist'.format(challenge_id))
         traceback.print_exc()
 
     phases = challenge.challengephase_set.all()
@@ -417,41 +445,42 @@ def process_add_challenge_message(message):
 
 def process_submission_callback(ch, method, properties, body):
     try:
-        print(" [x] Received %r" % body, properties, method)
+        logger.info("[x] Received submission message %s" % body)
         body = yaml.safe_load(body)
         body = dict((k, int(v)) for k, v in body.iteritems())
         process_submission_message(body)
         ch.basic_ack(delivery_tag=method.delivery_tag)
     except Exception as e:
-        print 'Error in receiving message from submission queue with error {}'.format(e)
+        logger.error('Error in receiving message from submission queue with error {}'.format(e))
         traceback.print_exc()
 
 
 def add_challenge_callback(ch, method, properties, body):
     try:
-        print(" [x] Received %r" % body, properties, method)
+        logger.info("[x] Received add challenge message %s" % body)
         body = yaml.safe_load(body)
         process_add_challenge_message(body)
         ch.basic_ack(delivery_tag=method.delivery_tag)
     except Exception as e:
-        print 'Error in receiving message from add challenge queue with error {}'.format(e)
+        logger.error('Error in receiving message from add challenge queue with error {}'.format(e))
         traceback.print_exc()
 
 
 def main():
 
-    print 'Using {0} as temp directory to store data'.format(BASE_TEMP_DIR)
+    logger.info('Using {0} as temp directory to store data'.format(BASE_TEMP_DIR))
     create_dir_as_python_package(COMPUTE_DIRECTORY_PATH)
 
     sys.path.append(COMPUTE_DIRECTORY_PATH)
 
     load_active_challenges()
-
     connection = pika.BlockingConnection(pika.ConnectionParameters(
-        host='localhost'))
+        host=settings.RABBITMQ_PARAMETERS['HOST'], heartbeat_interval=0))
 
     channel = connection.channel()
-    channel.exchange_declare(exchange='evalai_submissions', type='topic')
+    channel.exchange_declare(
+        exchange=settings.RABBITMQ_PARAMETERS['EVALAI_EXCHANGE']['NAME'],
+        type=settings.RABBITMQ_PARAMETERS['EVALAI_EXCHANGE']['TYPE'])
 
     # name can be a combination of hostname + process id
     # host name : to easily identify that the worker is running on which instance
@@ -459,21 +488,30 @@ def main():
     add_challenge_queue_name = '{hostname}_{process_id}'.format(hostname=socket.gethostname(),
                                                                 process_id=str(os.getpid()))
 
-    channel.queue_declare(queue='submission_task_queue', durable=True)
+    channel.queue_declare(
+        queue=settings.RABBITMQ_PARAMETERS['SUBMISSION_QUEUE'],
+        durable=True)
 
     # reason for using `exclusive` instead of `autodelete` is that
     # challenge addition queue should have only have one consumer on the connection
     # that creates it.
     channel.queue_declare(queue=add_challenge_queue_name, durable=True, exclusive=True)
-    print(' [*] Waiting for messages. To exit press CTRL+C')
+    logger.info('[*] Waiting for messages. To exit press CTRL+C')
 
     # create submission base data directory
     create_dir_as_python_package(SUBMISSION_DATA_BASE_DIR)
 
-    channel.queue_bind(exchange='evalai_submissions', queue='submission_task_queue', routing_key='submission.*.*')
-    channel.basic_consume(process_submission_callback, queue='submission_task_queue')
+    channel.queue_bind(
+        exchange=settings.RABBITMQ_PARAMETERS['EVALAI_EXCHANGE']['NAME'],
+        queue=settings.RABBITMQ_PARAMETERS['SUBMISSION_QUEUE'],
+        routing_key='submission.*.*')
+    channel.basic_consume(
+        process_submission_callback,
+        queue=settings.RABBITMQ_PARAMETERS['SUBMISSION_QUEUE'])
 
-    channel.queue_bind(exchange='evalai_submissions', queue=add_challenge_queue_name, routing_key='challenge.add.*')
+    channel.queue_bind(
+        exchange=settings.RABBITMQ_PARAMETERS['EVALAI_EXCHANGE']['NAME'],
+        queue=add_challenge_queue_name, routing_key='challenge.*.*')
     channel.basic_consume(add_challenge_callback, queue=add_challenge_queue_name)
 
     channel.start_consuming()

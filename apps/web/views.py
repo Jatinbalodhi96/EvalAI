@@ -35,35 +35,49 @@ def internal_server_error(request):
 
 
 @throttle_classes([AnonRateThrottle, ])
-@api_view(['POST', ])
+@api_view(['GET', 'POST'])
 @permission_classes((permissions.AllowAny,))
 def contact_us(request):
+    user_does_not_exist = False
     try:
         user = User.objects.get(username=request.user)
         name = user.username
         email = user.email
-        request_data = {"name": name, "email": email}
-        request_data['message'] = request.data['message']
+        request_data = {'name': name, 'email': email}
+    except:
+        request_data = request.data
+        user_does_not_exist = True
+
+    if request.method == 'POST' or user_does_not_exist:
+        if request.POST.get('message'):
+            request_data['message'] = request.POST.get('message')
         serializer = ContactSerializer(data=request_data)
         if serializer.is_valid():
             serializer.save()
-            response_data = {'message': 'Your message has been successfully recorded. We will contact you shortly.'}
+            response_data = {'message': 'We have received your request and will contact you shortly.'}
             return Response(response_data, status=status.HTTP_201_CREATED)
         return Response(serializer.errors, status=status.HTTP_400_BAD_REQUEST)
-    except:
-        serializer = ContactSerializer(data=request.data)
-        if serializer.is_valid():
-            serializer.save()
-            response_data = {'message': 'Your message has been successfully recorded. We will contact you shortly.'}
-            return Response(response_data, status=status.HTTP_201_CREATED)
-        return Response(serializer.errors, status=status.HTTP_400_BAD_REQUEST)
+
+    elif request.method == 'GET':
+        response_data = {"name": name, "email": email}
+        return Response(response_data, status=status.HTTP_200_OK)
 
 
 @throttle_classes([AnonRateThrottle])
-@api_view(['GET'])
+@api_view(['GET', 'POST'])
 @permission_classes((permissions.AllowAny,))
 def our_team(request):
-    teams = Team.objects.all()
-    serializer = TeamSerializer(teams, many=True, context={'request': request})
-    response_data = serializer.data
-    return Response(response_data, status=status.HTTP_200_OK)
+    if request.method == 'GET':
+        teams = Team.objects.all()
+        serializer = TeamSerializer(teams, many=True, context={'request': request})
+        response_data = serializer.data
+        return Response(response_data, status=status.HTTP_200_OK)
+    elif request.method == 'POST':
+        # team_type is set to Team.CONTRIBUTOR by default and can be overridden by the requester
+        request.data['team_type'] = request.data.get('team_type', Team.CONTRIBUTOR)
+        serializer = TeamSerializer(data=request.data)
+        if serializer.is_valid():
+            serializer.save()
+            response_data = {'message', 'Successfully added the contributor.'}
+            return Response(response_data, status=status.HTTP_201_CREATED)
+        return Response(serializer.errors, status=status.HTTP_400_BAD_REQUEST)

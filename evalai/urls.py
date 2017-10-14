@@ -20,9 +20,9 @@ from django.views.generic.base import TemplateView
 from django.conf import settings
 from django.conf.urls.static import static
 
+from allauth.account.views import ConfirmEmailView
 from rest_framework_expiring_authtoken.views import obtain_expiring_auth_token
 
-from accounts.views import ConfirmEmailView
 from web import views
 
 handler404 = 'web.views.page_not_found'
@@ -46,6 +46,10 @@ urlpatterns = [url(r'^$', views.home, name='home'),
                    TemplateView.as_view(
                        template_name="password_reset_confirm.html"),
                    name='password_reset_confirm'),
+               url(r'^api/auth/email-confirmed/$',
+                   TemplateView.as_view(
+                       template_name="account/email_confirm.html"),
+                   name='email_confirm_done'),
                url(r'^api/accounts/',
                    include('accounts.urls',
                            namespace='accounts')),
@@ -72,10 +76,12 @@ urlpatterns = [url(r'^$', views.home, name='home'),
 # DJANGO-SPAGHETTI-AND-MEATBALLS URLs available during development only.
 if settings.DEBUG:
     urlpatterns += [url(r'^dbschema/',
-                    include('django_spaghetti.urls')),
+                        include('django_spaghetti.urls')),
                     url(r'^docs/',
-                    include('rest_framework_docs.urls')),
+                        include('rest_framework_docs.urls')),
                     url(r'^api/admin-auth/',
                         include('rest_framework.urls',
                                 namespace='rest_framework')),
+                    url(r'^silk/',
+                        include('silk.urls', namespace='silk')),
                     ] + static(settings.MEDIA_URL, document_root=settings.MEDIA_ROOT)

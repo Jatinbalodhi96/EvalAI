@@ -5,10 +5,17 @@ import raven
 
 DEBUG = False
 
-ALLOWED_HOSTS = ['*']
+ALLOWED_HOSTS = ['evalapi.cloudcv.org', 'evalai.cloudcv.org']
 
 # Database
 # https://docs.djangoproject.com/en/1.10.2/ref/settings/#databases
+
+CORS_ORIGIN_ALLOW_ALL = False
+
+CORS_ORIGIN_WHITELIST = (
+    'evalai.cloudcv.org',
+    'evalai.s3.amazonaws.com',
+)
 
 DATABASES = {
     'default': {
@@ -69,6 +76,9 @@ RAVEN_CONFIG = {
     # release based on the git info.
     'release': raven.fetch_git_sha(os.path.dirname(os.pardir)),
 }
+
+# https://docs.djangoproject.com/en/1.10/ref/settings/#secure-proxy-ssl-header
+SECURE_PROXY_SSL_HEADER = ('HTTP_X_FORWARDED_PROTO', 'https')
 
 LOGGING['root'] = {                                     # noqa
     'level': 'INFO',

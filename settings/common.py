@@ -52,7 +52,6 @@ OUR_APPS = [
     'hosts',
     'jobs',
     'participants',
-    'submissions',
     'web',
 ]
 
@@ -60,6 +59,7 @@ THIRD_PARTY_APPS = [
     'allauth',
     'allauth.account',
     'corsheaders',
+    'import_export',
     'rest_auth',
     'rest_auth.registration',
     'rest_framework.authtoken',
@@ -139,7 +139,7 @@ USE_TZ = True
 # https://docs.djangoproject.com/en/1.10/howto/static-files/
 
 STATIC_URL = '/static/'
-
+STATIC_ROOT = os.path.join(BASE_DIR, 'static')
 MEDIA_ROOT = os.path.join(BASE_DIR, 'media')
 MEDIA_URL = "/media/"
 
@@ -172,6 +172,9 @@ REST_FRAMEWORK = {
 # ALLAUTH SETTINGS
 ACCOUNT_EMAIL_REQUIRED = True
 OLD_PASSWORD_FIELD_ENABLED = True
+ACCOUNT_CONFIRM_EMAIL_ON_GET = True
+ACCOUNT_EMAIL_CONFIRMATION_ANONYMOUS_REDIRECT_URL = '/api/auth/email-confirmed/'
+ACCOUNT_EMAIL_CONFIRMATION_AUTHENTICATED_REDIRECT_URL = '/api/auth/email-confirmed/'
 
 AUTHENTICATION_BACKENDS = (
     # Needed to login by username in Django admin, regardless of `allauth`
@@ -236,7 +239,7 @@ LOGGING = {
     'loggers': {
         'django': {
             'handlers': ['console'],
-            'propagate': True,
+            'propagate': False,
         },
         'django.request': {
             'handlers': ['mail_admins'],
@@ -260,4 +263,18 @@ CACHES = {
     'default': {
         'BACKEND': 'django.core.cache.backends.memcached.MemcachedCache',
     }
+}
+
+RABBITMQ_PARAMETERS = {
+    'HOST': os.environ.get("RABBITMQ_HOST", 'localhost'),
+    'EVALAI_EXCHANGE': {
+        'NAME': 'evalai_submissions',
+        'TYPE': 'topic',
+    },
+    'SUBMISSION_QUEUE': 'submission_task_queue',
+}
+
+# To make usermame field read-only, customized serializer is defined.
+REST_AUTH_SERIALIZERS = {
+    'USER_DETAILS_SERIALIZER': 'accounts.serializers.UserDetailsSerializer',
 }

@@ -7,9 +7,9 @@
         .module('evalai')
         .controller('TeamsCtrl', TeamsCtrl);
 
-    TeamsCtrl.$inject = ['utilities', '$scope', '$state', '$http', '$rootScope', '$mdDialog'];
+    TeamsCtrl.$inject = ['utilities','loaderService', '$scope', '$state', '$http', '$rootScope', '$mdDialog'];
 
-    function TeamsCtrl(utilities, $scope, $state, $http, $rootScope, $mdDialog) {
+    function TeamsCtrl(utilities,loaderService, $scope, $state, $http, $rootScope, $mdDialog) {
         var vm = this;
         // console.log(vm.teamId)
         var userKey = utilities.getData('userKey');
@@ -30,20 +30,14 @@
         // loader for existng teams// loader for exisiting teams
         vm.isExistLoader = false;
         vm.loaderTitle = '';
-        vm.loginContainer = angular.element('.exist-team-card');
+        vm.loaderContainer = angular.element('.exist-team-card');
 
         // show loader
-        vm.startExistLoader = function(msg) {
-            vm.isExistLoader = true;
-            vm.loaderTitle = msg;
-            vm.loginContainer.addClass('low-screen');
-        };
+        vm.startLoader = loaderService.startLoader;
+        vm.stopLoader = loaderService.stopLoader;
 
-        // stop loader
-        vm.stopExistLoader = function() {
-            vm.isExistLoader = false;
-            vm.loaderTitle = '';
-            vm.loginContainer.removeClass('low-screen');
+        vm.activateCollapsible = function() {
+            angular.element('.collapsible').collapsible();
         };
 
         var parameters = {};
@@ -59,9 +53,9 @@
 
                     if (vm.existTeam.count === 0) {
                         vm.showPagination = false;
-                        vm.paginationMsg = "No team exist for now, Start by creating a new team!";
+                        vm.paginationMsg = "No team exists for now, start by creating a new team!";
                     } else {
-
+                        vm.activateCollapsible();
                         vm.showPagination = true;
                         vm.paginationMsg = "";
                     }
@@ -93,21 +87,8 @@
                         // loader for exisiting teams
                         vm.isExistLoader = true;
                         vm.loaderTitle = '';
-                        vm.loginContainer = angular.element('.exist-team-card');
+                        vm.loaderContainer = angular.element('.exist-team-card');
 
-                        // show loader
-                        vm.startLoader = function(msg) {
-                            vm.isExistLoader = true;
-                            vm.loaderTitle = msg;
-                            vm.loginContainer.addClass('low-screen');
-                        };
-
-                        // stop loader
-                        vm.stopLoader = function() {
-                            vm.isExistLoader = false;
-                            vm.loaderTitle = '';
-                            vm.loginContainer.removeClass('low-screen');
-                        };
 
                         vm.startLoader("Loading Teams");
                         // loader end
@@ -117,12 +98,11 @@
                         parameters.method = 'POST';
                         parameters.token = userKey;
                         parameters.callback = {
-                            onSuccess: function(response) {
+                            onSuccess: function() {
                                 $state.go('web.challenge-page.overview');
                                 vm.stopLoader();
                             },
-                            onError: function(response) {
-                                var error = response.data;
+                            onError: function() {
                                 vm.existTeamError = "Please select a team";
                                 vm.stopLoader();
                             }
@@ -135,21 +115,8 @@
                         // loader for exisiting teams
                         vm.isExistLoader = true;
                         vm.loaderTitle = '';
-                        vm.loginContainer = angular.element('.exist-team-card');
+                        vm.loaderContainer = angular.element('.exist-team-card');
 
-                        // show loader
-                        vm.startLoader = function(msg) {
-                            vm.isExistLoader = true;
-                            vm.loaderTitle = msg;
-                            vm.loginContainer.addClass('low-screen');
-                        };
-
-                        // stop loader
-                        vm.stopLoader = function() {
-                            vm.isExistLoader = false;
-                            vm.loaderTitle = '';
-                            vm.loginContainer.removeClass('low-screen');
-                        };
 
                         vm.startLoader("Loading Teams");
                         if (url !== null) {
@@ -201,23 +168,11 @@
 
         // function to create new team
         vm.createNewTeam = function() {
-            vm.isLoader = true;
+            vm.isExistLoader = true;
             vm.loaderTitle = '';
-            vm.newContainer = angular.element('.new-team-card');
+            vm.loaderContainer = angular.element('.new-team-card');
 
             // show loader
-            vm.startLoader = function(msg) {
-                vm.isLoader = true;
-                vm.loaderTitle = msg;
-                vm.newContainer.addClass('low-screen');
-            };
-
-            // stop loader
-            vm.stopLoader = function() {
-                vm.isLoader = false;
-                vm.loaderTitle = '';
-                vm.newContainer.removeClass('low-screen');
-            };
 
             vm.startLoader("Loading Teams");
 
@@ -229,13 +184,13 @@
             };
             parameters.token = userKey;
             parameters.callback = {
-                onSuccess: function(response) {
-                    $rootScope.notify("success", "Team- " + vm.team.name + " has been created successfully!");
+                onSuccess: function() {
+                    $rootScope.notify("success", "Team " + vm.team.name + " has been created successfully!");
                     vm.team.error = false;
                     vm.stopLoader();
                     vm.team.name = '';
 
-                    vm.startExistLoader("Loading Teams");
+                    vm.startLoader("Loading Teams");
                     var parameters = {};
                     parameters.url = 'participants/participant_team';
                     parameters.method = 'GET';
@@ -266,11 +221,11 @@
                                 }
 
 
-                                vm.stopExistLoader();
+                                vm.stopLoader();
                             }
                         },
-                        onError: function(response) {
-                            vm.stopExistLoader();
+                        onError: function() {
+                            vm.stopLoader();
                         }
                     };
                     utilities.sendRequest(parameters);
@@ -289,6 +244,7 @@
         };
 
         vm.confirmDelete = function(ev, participantTeamId) {
+            ev.stopPropagation();
             // Appending dialog to document.body to cover sidenav in docs app
             var confirm = $mdDialog.confirm()
                 .title('Would you like to remove yourself?')
@@ -299,16 +255,15 @@
                 .cancel("No");
 
             $mdDialog.show(confirm).then(function() {
-                vm.startExistLoader();
+                vm.startLoader();
                 var parameters = {};
                 parameters.url = 'participants/remove_self_from_participant_team/' + participantTeamId;
                 parameters.method = 'DELETE';
                 parameters.data = {};
                 parameters.token = userKey;
                 parameters.callback = {
-                    onSuccess: function(response) {
+                    onSuccess: function() {
 
-                        var details = response.data;
                         vm.team.error = false;
                         $rootScope.notify("info", "You have removed yourself successfully");
 
@@ -343,33 +298,34 @@
                                     if (vm.existTeam.count === 0) {
 
                                         vm.showPagination = false;
-                                        vm.paginationMsg = "No team exist for now, Start by creating a new team!";
+                                        vm.paginationMsg = "No team exists for now, start by creating a new team!";
                                     } else {
                                         vm.showPagination = true;
                                         vm.paginationMsg = "";
                                     }
                                 }
 
-                                vm.stopExistLoader();
+                                vm.stopLoader();
                             }
                         };
                         utilities.sendRequest(parameters);
                     },
                     onError: function(response) {
-                        vm.stopExistLoader();
-                        $rootScope.notify("error", "couldn't remove you from the challenge");
+                        var error = response.data['error'];
+                        vm.stopLoader();
+                        $rootScope.notify("error", error);
                     }
                 };
 
                 utilities.sendRequest(parameters);
 
             }, function() {
-                console.log("Operation defered");
             });
         };
 
 
         vm.inviteOthers = function(ev, participantTeamId) {
+            ev.stopPropagation();
             // Appending dialog to document.body to cover sidenav in docs app
             var confirm = $mdDialog.prompt()
                 .title('Invite others to this team')
@@ -381,7 +337,6 @@
                 .cancel('Cancel');
 
             $mdDialog.show(confirm).then(function(result) {
-                console.log(result);
                 var parameters = {};
                 parameters.url = 'participants/participant_team/' + participantTeamId + '/invite';
                 parameters.method = 'POST';
@@ -391,16 +346,17 @@
                 parameters.token = userKey;
                 parameters.callback = {
                     onSuccess: function(response) {
-                        $rootScope.notify("success", parameters.data.email + " has been invited successfully");
+                        var message = response.data['message'];
+                        $rootScope.notify("success", message);
                     },
                     onError: function(response) {
-                        $rootScope.notify("error", "couldn't invite " + parameters.data.email + ". Please try again.");
+                        var error = response.data['error'];
+                        $rootScope.notify("error", error);
                     }
                 };
 
                 utilities.sendRequest(parameters);
             }, function() {
-                console.log("Operation Aborted");
             });
         };
     }
